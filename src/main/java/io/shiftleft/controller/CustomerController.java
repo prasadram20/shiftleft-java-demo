@@ -216,7 +216,7 @@ public class CustomerController {
    * @param request
    * @throws Exception
    */
-  @RequestMapping(value = "/saveSettings", method = RequestMethod.GET)
+@RequestMapping(value = "/saveSettings", method = RequestMethod.GET)
   public void saveSettings(HttpServletResponse httpResponse, WebRequest request) throws Exception {
     // "Settings" will be stored in a cookie
     // schema: base64(filename,value1,value2...), md5sum(base64(filename,value1,value2...))
@@ -246,65 +246,54 @@ public class CustomerController {
 
     // Now we can store on filesystem
     String[] settings = new String(Base64.getDecoder().decode(base64txt)).split(",");
-	// storage will have ClassPathResource as basepath
-    ClassPathResource cpr = new ClassPathResource("./static/");
-	  File file = new File(cpr.getPath()+settings[0]);
-    if(!file.exists()) {
-      file.getParentFile().mkdirs();
+    
+    // FIX: Use Path API to safely resolve and validate filename
+    String userFilename = settings[0];
+    
+    // FIX: Use Path API to get canonical base path
+    Path basePath = Paths.get(new ClassPathResource("./static/").getPath()).toRealPath();
+    
+    // FIX: Extract only filename component using Path.getFileName() to prevent directory traversal
+    Path userPath = Paths.get(userFilename).getFileName();
+    
+    if (userPath == null || userPath.toString().isEmpty()) {
+        httpResponse.getOutputStream().println("Invalid filename");
+        throw new SecurityException("Invalid filename provided");
+    }
+    
+    // FIX: Resolve path safely and normalize to remove any remaining path traversal sequences
+    Path resolvedPath = basePath.resolve(userPath).normalize();
+    
+    // FIX: Validate using Path.startsWith() for OS-aware path comparison
+    if (!resolvedPath.normalize().startsWith(basePath.normalize())) {
+        httpResponse.getOutputStream().println("Access denied");
+        throw new SecurityException("Path traversal detected");
+    }
+    
+    File file = resolvedPath.toFile();
+    
+    // FIX: Use Files.createFile() with explicit permission controls for secure file creation
+    if (!Files.exists(resolvedPath)) {
+        try {
+            // FIX: Create file with restricted permissions (owner read/write only) on POSIX systems
+            Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-------");
+            FileAttribute<Set<PosixFilePermission>> attr = PosixFilePermissions.asFileAttribute(perms);
+            Files.createFile(resolvedPath, attr);
+        } catch (UnsupportedOperationException e) {
+            // FIX: Fallback for non-POSIX systems (Windows)
+            Files.createFile(resolvedPath);
+        }
     }
 
-    FileOutputStream fos = new FileOutputStream(file, true);
-    // First entry is the filename -> remove it
+    // FIX: Use Files.write() for atomic write operations with explicit encoding
     String[] settingsArr = Arrays.copyOfRange(settings, 1, settings.length);
-    // on setting at a linez
-    fos.write(String.join("\n",settingsArr).getBytes());
-    fos.write(("\n"+cookie[cookie.length-1]).getBytes());
-    fos.close();
+    String content = String.join("\n", settingsArr) + "\n" + cookie[cookie.length-1];
+    Files.write(resolvedPath, content.getBytes(StandardCharsets.UTF_8), 
+               StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    
     httpResponse.getOutputStream().println("Settings Saved");
   }
 
-  /**
-   * Debug test for saving and reading a customer
-   *
-   * @param firstName String
-   * @param lastName String
-   * @param dateOfBirth String
-   * @param ssn String
-   * @param tin String
-   * @param phoneNumber String
-   * @param httpResponse
-   * @param request
-   * @return String
-   * @throws IOException
-   */
-  @RequestMapping(value = "/debug", method = RequestMethod.GET)
-  public String debug(@RequestParam String customerId,
-					  @RequestParam int clientId,
-					  @RequestParam String firstName,
-                      @RequestParam String lastName,
-                      @RequestParam String dateOfBirth,
-                      @RequestParam String ssn,
-					  @RequestParam String socialSecurityNum,
-                      @RequestParam String tin,
-                      @RequestParam String phoneNumber,
-                      HttpServletResponse httpResponse,
-                     WebRequest request) throws IOException{
-
-    // empty for now, because we debug
-    Set<Account> accounts1 = new HashSet<Account>();
-    //dateofbirth example -> "1982-01-10"
-    Customer customer1 = new Customer(customerId, clientId, firstName, lastName, DateTime.parse(dateOfBirth).toDate(),
-                                      ssn, socialSecurityNum, tin, phoneNumber, new Address("Debug str",
-                                      "", "Debug city", "CA", "12345"),
-                                      accounts1);
-
-    customerRepository.save(customer1);
-    httpResponse.setStatus(HttpStatus.CREATED.value());
-    httpResponse.setHeader("Location", String.format("%s/customers/%s",
-                           request.getContextPath(), customer1.getId()));
-
-    return customer1.toString().toLowerCase().replace("script","");
-  }
 
 	/**
 	 * Debug test for saving and reading a customer
